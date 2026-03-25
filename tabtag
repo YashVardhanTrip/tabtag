@@ -1,0 +1,232 @@
+#!/bin/bash
+# tabtag - Tag your terminal tabs with names and colors
+# Works with iTerm2 (escape codes) and Terminal.app (AppleScript)
+
+set -e
+
+# Predefined color palette (RGB values) - visually distinct
+COLORS=(
+    "255:89:94"    # Red
+    "255:202:58"   # Yellow
+    "138:201:38"   # Green
+    "25:130:196"   # Blue
+    "106:76:147"   # Purple
+    "255:146:43"   # Orange
+    "0:187:187"    # Cyan
+    "233:86:180"   # Pink
+    "52:199:165"   # Teal
+    "162:155:254"  # Lavender
+)
+
+# Bold terminal colors for the prompt indicator
+TERM_COLORS=(
+    "\033[1;31m"   # Red
+    "\033[1;33m"   # Yellow
+    "\033[1;32m"   # Green
+    "\033[1;34m"   # Blue
+    "\033[1;35m"   # Purple
+    "\033[1;38;5;208m" # Orange
+    "\033[1;36m"   # Cyan
+    "\033[1;38;5;205m" # Pink
+    "\033[1;38;5;49m"  # Teal
+    "\033[1;38;5;141m" # Lavender
+)
+
+RESET="\033[0m"
+
+# Detect terminal
+detect_terminal() {
+    if [[ "$TERM_PROGRAM" == "iTerm.app" ]]; then
+        echo "iterm"
+    elif [[ "$TERM_PROGRAM" == "Apple_Terminal" ]]; then
+        echo "terminal"
+    else
+        echo "unknown"
+    fi
+}
+
+usage() {
+    echo "Usage: tabtag <name> [color_index] [--font-size N]"
+    echo "       tabtag --list           Show available colors"
+    echo "       tabtag --reset          Reset tab to defaults"
+    echo ""
+    echo "Options:"
+    echo "  --font-size N    Set terminal font size (e.g. 14)"
+    echo ""
+    echo "Examples:"
+    echo "  tabtag api                       # Auto-assigns a color"
+    echo "  tabtag 'auth service' 3          # Green (#3)"
+    echo "  tabtag backend 1 --font-size 16  # Red, 16pt font"
+    echo "  tabtag api --font-size 12        # Auto color, 12pt font"
+    echo ""
+    echo "Tags your terminal tab with a name and color."
+    echo "Works with both Terminal.app and iTerm2."
+}
+
+list_colors() {
+    echo "Available colors:"
+    for i in "${!COLORS[@]}"; do
+        IFS=: read -r r g b <<< "${COLORS[$i]}"
+        idx=$((i + 1))
+        echo -e "  ${idx}) \033[48;2;${r};${g};${b}m    \033[0m  RGB(${r}, ${g}, ${b})"
+    done
+}
+
+set_iterm_tab_color() {
+    local r=$1 g=$2 b=$3
+    echo -ne "\033]6;1;bg;red;brightness;${r}\a"
+    echo -ne "\033]6;1;bg;green;brightness;${g}\a"
+    echo -ne "\033]6;1;bg;blue;brightness;${b}\a"
+}
+
+set_terminal_app_color() {
+    # Terminal.app cannot color tabs — no-op
+    :
+}
+
+set_terminal_app_title() {
+    osascript -e "
+        tell application \"Terminal\"
+            set custom title of selected tab of front window to \"$1\"
+        end tell
+    " 2>/dev/null
+}
+
+set_tab_title() {
+    echo -ne "\033]0;$1\007"
+}
+
+set_font_size() {
+    local size=$1
+    local term=$(detect_terminal)
+    if [[ "$term" == "iterm" ]]; then
+        osascript -e "
+            tell application \"iTerm2\"
+                tell current session of current window
+                    set name to name
+                    set font size to ${size}
+                end tell
+            end tell
+        " 2>/dev/null
+    elif [[ "$term" == "terminal" ]]; then
+        osascript -e "
+            tell application \"Terminal\"
+                set f to name of font of selected tab of front window
+                set font of selected tab of front window to f
+                set font size of selected tab of front window to ${size}
+            end tell
+        " 2>/dev/null
+    fi
+}
+
+reset_tab() {
+    local term=$(detect_terminal)
+    if [[ "$term" == "iterm" ]]; then
+        echo -ne "\033]6;1;bg;*;default\a"
+        echo -ne "\033]0;\007"
+    elif [[ "$term" == "terminal" ]]; then
+        osascript -e '
+            tell application "Terminal"
+                set custom title of selected tab of front window to ""
+            end tell
+        ' 2>/dev/null
+        echo -ne "\033]0;\007"
+    else
+        echo -ne "\033]6;1;bg;*;default\a"
+        echo -ne "\033]0;\007"
+    fi
+    echo "Tab reset to defaults."
+}
+
+# Hash a string to a number (for auto-color assignment)
+hash_string() {
+    echo -n "$1" | md5 | tr -d '[:alpha:]' | head -c 4
+}
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+case "$1" in
+    --list|-l)
+        list_colors
+        exit 0
+        ;;
+    --reset|-r)
+        reset_tab
+        exit 0
+        ;;
+    --help|-h)
+        usage
+        exit 0
+        ;;
+esac
+
+# Parse arguments
+FONT_SIZE=""
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --font-size|-fs)
+            FONT_SIZE="$2"
+            shift 2
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+
+NAME="${POSITIONAL[0]}"
+COLOR_IDX="${POSITIONAL[1]:-}"
+
+# Auto-assign color based on name hash if not specified
+if [[ -z "$COLOR_IDX" ]]; then
+    hash_val=$(hash_string "$NAME")
+    COLOR_IDX=$(( (hash_val % ${#COLORS[@]}) + 1 ))
+fi
+
+# Validate color index
+if [[ $COLOR_IDX -lt 1 || $COLOR_IDX -gt ${#COLORS[@]} ]]; then
+    echo "Error: Color index must be 1-${#COLORS[@]}. Use 'tabtag --list' to see colors."
+    exit 1
+fi
+
+# Get color (0-indexed array)
+arr_idx=$((COLOR_IDX - 1))
+IFS=: read -r R G B <<< "${COLORS[$arr_idx]}"
+TCOLOR="${TERM_COLORS[$arr_idx]}"
+
+# Detect terminal and apply accordingly
+TERM_TYPE=$(detect_terminal)
+
+# Set tab title
+if [[ "$TERM_TYPE" == "terminal" ]]; then
+    set_terminal_app_title "[$NAME]"
+else
+    set_tab_title "[$NAME]"
+fi
+
+# Set tab color
+if [[ "$TERM_TYPE" == "iterm" ]]; then
+    set_iterm_tab_color "$R" "$G" "$B"
+elif [[ "$TERM_TYPE" == "terminal" ]]; then
+    set_terminal_app_color "$R" "$G" "$B"
+else
+    # Try both methods as fallback
+    set_iterm_tab_color "$R" "$G" "$B" 2>/dev/null
+fi
+
+# Set font size if specified
+if [[ -n "$FONT_SIZE" ]]; then
+    set_font_size "$FONT_SIZE"
+fi
+
+# Print confirmation with color
+FONT_MSG=""
+if [[ -n "$FONT_SIZE" ]]; then
+    FONT_MSG="  font: ${FONT_SIZE}pt"
+fi
+echo -e "${TCOLOR}▊ Tab tagged: ${NAME}${RESET}  (color #${COLOR_IDX})${FONT_MSG}"
