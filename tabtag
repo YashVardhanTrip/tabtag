@@ -56,7 +56,7 @@ usage() {
     echo "Examples:"
     echo "  tabtag api                       # Auto-assigns a color"
     echo "  tabtag 'auth service' 3          # Green (#3)"
-    echo "  tabtag backend 1 --font-size 16  # Red, 16pt font"
+    echo "  tabtag coinbase 1 --font-size 16 # Red, 16pt font"
     echo "  tabtag api --font-size 12        # Auto color, 12pt font"
     echo ""
     echo "Tags your terminal tab with a name and color."
@@ -93,7 +93,20 @@ set_terminal_app_title() {
 }
 
 set_tab_title() {
-    echo -ne "\033]0;$1\007"
+    # Use \033]1; to set tab title only (not window title)
+    # This prevents apps like Claude Code from overwriting it
+    echo -ne "\033]1;$1\007"
+
+    # Also install a zsh precmd hook to persist the title
+    if [[ -n "$ZSH_VERSION" ]]; then
+        eval "
+            __tabtag_title='$1'
+            __tabtag_precmd() { echo -ne \"\033]1;\${__tabtag_title}\007\"; }
+            # Remove old hook if exists, then add
+            precmd_functions=(\${precmd_functions:#__tabtag_precmd})
+            precmd_functions+=(__tabtag_precmd)
+        "
+    fi
 }
 
 set_font_size() {
@@ -120,9 +133,15 @@ set_font_size() {
 }
 
 reset_tab() {
+    # Remove precmd hook if exists
+    if [[ -n "$ZSH_VERSION" ]]; then
+        precmd_functions=(${precmd_functions:#__tabtag_precmd})
+        unset __tabtag_title 2>/dev/null
+    fi
     local term=$(detect_terminal)
     if [[ "$term" == "iterm" ]]; then
         echo -ne "\033]6;1;bg;*;default\a"
+        echo -ne "\033]1;\007"
         echo -ne "\033]0;\007"
     elif [[ "$term" == "terminal" ]]; then
         osascript -e '
